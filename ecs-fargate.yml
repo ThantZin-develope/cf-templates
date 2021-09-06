@@ -1,0 +1,174 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: "Testing Aws ECS with FarGate LunchType"
+
+Parameters:
+   
+  ImageUrl:
+     Description:
+       "Image has to be in public regstry type"
+     Type: String
+     Default: "httpd:2.4"
+
+Resources:
+
+
+     TempVPC:
+       Type: AWS::EC2::VPC
+       Properties:
+         CidrBlock: 10.0.0.0/16
+         EnableDnsSupport: true
+     
+     TempInternetGateway:
+       Type: AWS::EC2::InternetGateway
+       Properties:
+         Tags:
+           - Key: Name
+             Value: CustomGateWay
+     AttachGateway:
+       Type: AWS::EC2::VPCGatewayAttachment
+       Properties:
+         VpcId: !Ref TempVPC
+         InternetGatewayId: !Ref TempInternetGateway
+     
+     PublicSubnet01:
+       Type: AWS::EC2::Subnet
+       Properties:
+         AvailabilityZone: "us-east-1b"
+         VpcId: !Ref TempVPC
+         CidrBlock: 10.0.1.0/24  
+         MapPublicIpOnLaunch: True 
+     
+     PublicSubnet02:
+       Type: AWS::EC2::Subnet
+       Properties:
+         AvailabilityZone: "us-east-1c"
+         VpcId: !Ref TempVPC
+         CidrBlock: 10.0.2.0/24
+
+     PublicRouteTable:
+       Type: AWS::EC2::RouteTable
+       Properties:
+         VpcId: !Ref TempVPC
+    
+     DefaultPublicRoute:
+       Type: AWS::EC2::Route
+       DependsOn: AttachGateway
+       Properties:
+         RouteTableId: !Ref PublicRouteTable
+         DestinationCidrBlock: 0.0.0.0/0
+         GatewayId: !Ref TempInternetGateway
+     
+     PublicSubnet01RouteAssociation:
+       Type: AWS::EC2::SubnetRouteTableAssociation
+       Properties:
+         SubnetId: !Ref PublicSubnet01
+         RouteTableId: !Ref PublicRouteTable
+         
+     PublicSubnet02RouteAssociation:
+       Type: AWS::EC2::SubnetRouteTableAssociation
+       Properties:
+         SubnetId: !Ref PublicSubnet02
+         RouteTableId: !Ref PublicRouteTable
+     
+     TempSG:
+       Type: AWS::EC2::SecurityGroup
+       Properties:
+         GroupName: "TempVPCSG"
+         GroupDescription: "CustomSecurity Group for Custom VPC with specified ingress and egress rules"
+         VpcId: !Ref TempVPC
+         SecurityGroupIngress:
+           - 
+             IpProtocol: "tcp"
+             FromPort: 22
+             ToPort: 80
+             CidrIp: 0.0.0.0/0
+
+           - 
+             IpProtocol: "-1"
+             CidrIp: 0.0.0.0/0 
+
+         SecurityGroupEgress:
+           - 
+             IpProtocol: "-1"
+             CidrIp: 0.0.0.0/0
+          
+           
+     TempECSExecututionRole:
+       Type: AWS::IAM::Role
+       Properties:
+         ManagedPolicyArns:
+            - 
+              "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+         AssumeRolePolicyDocument: 
+              Version: "2012-10-17"
+              Statement:
+                - 
+                  Effect: Allow
+                  Principal: 
+                     Service:
+                       ecs-tasks.amazonaws.com
+                  Action:
+                       sts:AssumeRole     
+
+         
+     LogsGroup:
+       Type: AWS::Logs::LogGroup
+       Properties:
+         LogGroupName: "ECS-Fargate-LogsGroup"
+     TempTaskDefination:
+       Type: AWS::ECS::TaskDefinition
+       Properties:
+         ContainerDefinitions: 
+            -  
+              Cpu: 0
+              Essential: True
+              Image: !Ref ImageUrl
+              LogConfiguration: 
+                   LogDriver: "awslogs"
+                   Options: 
+                      awslogs-group: !Ref LogsGroup
+                      awslogs-region: "us-east-1"
+                      awslogs-stream-prefix: "ecs"
+              
+              Name: "TemTaskDeifnation"
+              PortMappings:
+                 - 
+                   ContainerPort: 8999
+                   HostPort: 8999
+                   Protocol: "tcp"        
+         Cpu: "256"
+         ExecutionRoleArn: !GetAtt TempECSExecututionRole.Arn
+         Family: "TEM-ECS-Fargate"
+         Memory: "512"
+         NetworkMode: "awsvpc"
+         TaskRoleArn: !GetAtt TempECSExecututionRole.Arn
+         RequiresCompatibilities:
+            - 
+              "FARGATE"
+     
+     TemClusterFargate:
+       Type: AWS::ECS::Cluster
+       Properties:
+         CapacityProviders:
+           - 
+             "FARGATE"
+         ClusterName: "TemClusterFargate"
+     
+     TemClusterServiceFargate:
+       Type: AWS::ECS::Service
+       Properties:
+         Cluster: !Ref TemClusterFargate
+         DesiredCount: 1
+         LaunchType: "FARGATE"
+         NetworkConfiguration:
+             AwsvpcConfiguration:
+                AssignPublicIp: "ENABLED"
+                SecurityGroups: 
+                  - 
+                    !Ref TempSG
+                Subnets:
+                  - 
+                    !Ref PublicSubnet01
+                   
+         ServiceName: "String"
+         TaskDefinition: !Ref TempTaskDefination    

@@ -1,0 +1,291 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: "ECS Testing using EC2 Launch Type"
+  
+Parameters:
+   
+  ImageUrl:
+     Description: 
+        "Image Url"
+     Type: String
+     Default: "httpd:2.4" 
+
+  EC2ImageId:
+
+     Description:
+        "EC2 Image Id"
+     Type: String
+     Default: "ami-087c17d1fe0178315"
+
+  InstanceType:
+
+     Description: 
+        "Type of Instance"
+     Type: String 
+     Default: "t2.micro"           
+
+  
+Resources:
+    
+    TempTaskExecutionRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: "TempTaskExecutionRole"
+        ManagedPolicyArns:
+            - 
+              "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+        AssumeRolePolicyDocument: 
+             Version: "2012-10-17"
+             Statement:
+                - 
+                  Effect: Allow
+                  Principal: 
+                     Service:
+                       ecs-tasks.amazonaws.com
+                  Action:
+                       sts:AssumeRole  
+
+    TempECSInstanceRole:
+      Type: AWS::IAM::Role
+      Properties:
+        ManagedPolicyArns:
+            - 
+              "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"
+        AssumeRolePolicyDocument: 
+              Version: "2012-10-17"
+              Statement:
+                - 
+                  Effect: Allow
+                  Principal: 
+                     Service:
+                       "ec2.amazonaws.com"
+                  Action:
+                       sts:AssumeRole
+    TempAutoscalingRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument: 
+          Statement:
+           - Effect: Allow
+             Principal:
+              Service:
+                - application-autoscaling.amazonaws.com
+             Action:
+                - 'sts:AssumeRole'
+        Policies:
+         - PolicyName: service-autoscaling
+           PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'application-autoscaling:*'
+                  - 'cloudwatch:DescribeAlarms'
+                  - 'cloudwatch:PutMetricAlarm'
+                  - 'ecs:DescribeServices'
+                  - 'ecs:UpdateService'
+                Resource: '*'                  
+
+    TempCustomVPC:
+      Type: AWS::EC2::VPC
+      Properties:
+        CidrBlock: 10.0.0.0/16
+        EnableDnsSupport: true
+        Tags:
+          - Key: Name
+            Value: TempCustomVPC      
+
+    TempInternetGateway:
+      Type: AWS::EC2::InternetGateway
+      Properties:
+        Tags:
+          - Key: Name
+            Value: TempInternetGateway
+    AttachGateway:
+      Type: AWS::EC2::VPCGatewayAttachment
+      Properties:
+        VpcId: !Ref TempCustomVPC
+        InternetGatewayId: !Ref TempInternetGateway                    
+    
+    TempPublicSubnet1:
+      Type: AWS::EC2::Subnet
+      Properties:
+        MapPublicIpOnLaunch: True
+        AvailabilityZone: "us-east-1b"
+        VpcId: !Ref TempCustomVPC
+        CidrBlock: 10.0.1.0/24
+        Tags:
+          - Key: Name
+            Value: TempPublicSubnet1
+    
+    TempPubicRouteTable:
+      Type: AWS::EC2::RouteTable
+      Properties:
+        VpcId: !Ref TempCustomVPC
+        Tags:
+          - Key: Name
+            Value: TempPubicRouteTable
+
+    TempPubiicRoute:
+      Type: AWS::EC2::Route
+      Properties:
+        RouteTableId: !Ref TempPubicRouteTable
+        DestinationCidrBlock: 0.0.0.0/0
+        GatewayId: !Ref TempInternetGateway     
+    
+    PublicSubnet1RouteAssociation:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        SubnetId: !Ref TempPublicSubnet1
+        RouteTableId: !Ref TempPubicRouteTable
+
+    TempSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupName: "TempSecurityGroup"
+        GroupDescription: "Security Group for Custom VPC"
+        VpcId: !Ref TempCustomVPC
+        SecurityGroupIngress:
+          - 
+            IpProtocol: "tcp"
+            FromPort: 22
+            ToPort: 80
+            CidrIp: 0.0.0.0/0
+
+          - 
+
+            IpProtocol: "-1"
+            CidrIp: 0.0.0.0/0  
+        SecurityGroupEgress:
+          - 
+            IpProtocol: "-1"
+            CidrIp: 0.0.0.0/0
+        Tags:
+          - Key: Name
+            Value: "TempSecurityGroup" 
+      
+    TempLogsGroup:
+        Type: AWS::Logs::LogGroup
+        Properties:
+          LogGroupName: "ECS-Logs-Group" 
+
+    TempTaskDefinationEC2:
+        Type: AWS::ECS::TaskDefinition
+        Properties:
+          ContainerDefinitions:
+            - 
+              PortMappings:
+                 - 
+                   ContainerPort: 8999
+                   HostPort: 8999
+                   Protocol: "tcp"
+              Cpu: 0
+              Memory: 128
+              Essential: True
+              Image: !Ref ImageUrl     
+              Name: "TempTaskDefiantionEC2"
+              LogConfiguration: 
+                   LogDriver: "awslogs"
+                   Options: 
+                      awslogs-group: !Ref TempLogsGroup
+                      awslogs-region: "us-east-1"
+                      awslogs-stream-prefix: "ecs"
+          Cpu: "256"
+          ExecutionRoleArn: !GetAtt TempTaskExecutionRole.Arn
+          Family: "Custom-Task-Defination"
+          Memory: "523"
+          RequiresCompatibilities:
+            - "EC2"
+          TaskRoleArn: !GetAtt TempTaskExecutionRole.Arn
+
+    TempECSCluster:
+        Type: AWS::ECS::Cluster
+        Properties:
+
+          ClusterName: "TempECSCluster"
+
+    TempEC2InstanceProfile:
+        Type: AWS::IAM::InstanceProfile
+        Properties:
+          Path: /
+          Roles:
+            - !Ref TempECSInstanceRole
+      
+    TempContainerInstances:
+        Type: AWS::AutoScaling::LaunchConfiguration
+        Properties:
+          IamInstanceProfile: !Ref TempEC2InstanceProfile 
+          ImageId: !Ref EC2ImageId # Required
+          InstanceType: !Ref InstanceType # Required
+          KeyName: "test"
+          SecurityGroups:
+            - 
+              !Ref TempSecurityGroup
+                       
+          UserData: !Base64 
+          'Fn::Join':
+            - ''
+            - - |
+                #!/bin/bash -xe
+              - echo ECS_CLUSTER=
+              - !Ref TempECSCluster
+              - |2
+                 >> /etc/ecs/ecs.config
+              - |
+                yum install -y aws-cfn-bootstrap
+              - '/opt/aws/bin/cfn-signal -e $? '
+              - '         --stack '
+              - !Ref 'AWS::StackName'
+              - '         --resource TempAutoscalingGroup '
+              - '         --region '
+              - !Ref 'AWS::Region'
+              - |+
+                
+    TempAutoscalingGroup:
+        Type: AWS::AutoScaling::AutoScalingGroup
+        Properties:
+          AutoScalingGroupName: "TempAutoScalingGroup"
+          DesiredCapacity: "1"
+          LaunchConfigurationName: !Ref TempContainerInstances
+          MaxSize: "1" # Required
+          MinSize: "1" # Required
+          VPCZoneIdentifier:
+            - !Ref TempPublicSubnet1
+
+    TempECSService:
+        Type: AWS::ECS::Service
+        Properties:
+          Cluster: !Ref TempECSCluster
+          DesiredCount: 1
+          LaunchType: "EC2"
+          ServiceName: "TempECSServiceName"
+          TaskDefinition: !Ref TempTaskDefinationEC2
+
+    TempServiceScalingTarget:
+        Type: AWS::ApplicationAutoScaling::ScalableTarget
+        DependsOn: TempECSService
+        Properties:
+          MaxCapacity: 1 # Required
+          MinCapacity: 1 # Required
+          ResourceId: !Join 
+            - ''
+            - - service/
+              - !Ref TempECSCluster
+              - /
+              - !GetAtt TempECSService.Name
+          RoleARN: !GetAtt TempAutoscalingRole.Arn  # Required
+          ScalableDimension: 'ecs:service:DesiredCount' # Required
+          ServiceNamespace: "ecs" # Required
+
+    ServicesScalingPolicy:
+      Type: AWS::ApplicationAutoScaling::ScalingPolicy
+      Properties:
+        PolicyName: "AStepPolicy" # Required
+        PolicyType: "StepScaling" # Required
+        ScalingTargetId: !Ref TempServiceScalingTarget
+        StepScalingPolicyConfiguration:
+          AdjustmentType: "PercentChangeInCapacity"
+          Cooldown: 60
+          MetricAggregationType: "Average"
+          StepAdjustments:
+            - MetricIntervalLowerBound: 0
+              ScalingAdjustment: 200
+               
