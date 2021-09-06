@@ -14,16 +14,29 @@ Parameters:
      Description:
         "EC2 Image Id"
      Type: String
-     Default: "ami-087c17d1fe0178315"
+     Default: "ami-03db9b2aac6af477d"
 
   InstanceType:
 
      Description: 
         "Type of Instance"
      Type: String 
-     Default: "t2.micro"           
+     Default: "t2.micro"     
 
-  
+  ContainerPort:
+     
+     Description: 
+        "Your Container Port"
+     Type: Number  
+     Default: 80
+
+  HostPort: 
+
+     Description:
+        "Your Host Port"
+
+     Type: Number 
+     Default: 80      
 Resources:
     
     TempTaskExecutionRole:
@@ -146,14 +159,21 @@ Resources:
         SecurityGroupIngress:
           - 
             IpProtocol: "tcp"
-            FromPort: 22
+            FromPort: 80
             ToPort: 80
             CidrIp: 0.0.0.0/0
 
           - 
-
             IpProtocol: "-1"
             CidrIp: 0.0.0.0/0  
+
+          - 
+            IpProtocol: "tcp"
+            FromPort: 22
+            ToPort: 22
+            CidrIp: 0.0.0.0/0
+
+        
         SecurityGroupEgress:
           - 
             IpProtocol: "-1"
@@ -174,8 +194,8 @@ Resources:
             - 
               PortMappings:
                  - 
-                   ContainerPort: 8999
-                   HostPort: 8999
+                   ContainerPort: !Ref ContainerPort
+                   HostPort: !Ref HostPort
                    Protocol: "tcp"
               Cpu: 0
               Memory: 128
@@ -208,37 +228,7 @@ Resources:
           Path: /
           Roles:
             - !Ref TempECSInstanceRole
-      
-    TempContainerInstances:
-        Type: AWS::AutoScaling::LaunchConfiguration
-        Properties:
-          IamInstanceProfile: !Ref TempEC2InstanceProfile 
-          ImageId: !Ref EC2ImageId # Required
-          InstanceType: !Ref InstanceType # Required
-          KeyName: "test"
-          SecurityGroups:
-            - 
-              !Ref TempSecurityGroup
-                       
-          UserData: !Base64 
-          'Fn::Join':
-            - ''
-            - - |
-                #!/bin/bash -xe
-              - echo ECS_CLUSTER=
-              - !Ref TempECSCluster
-              - |2
-                 >> /etc/ecs/ecs.config
-              - |
-                yum install -y aws-cfn-bootstrap
-              - '/opt/aws/bin/cfn-signal -e $? '
-              - '         --stack '
-              - !Ref 'AWS::StackName'
-              - '         --resource TempAutoscalingGroup '
-              - '         --region '
-              - !Ref 'AWS::Region'
-              - |+
-                
+
     TempAutoscalingGroup:
         Type: AWS::AutoScaling::AutoScalingGroup
         Properties:
@@ -248,7 +238,7 @@ Resources:
           MaxSize: "1" # Required
           MinSize: "1" # Required
           VPCZoneIdentifier:
-            - !Ref TempPublicSubnet1
+            - !Ref TempPublicSubnet1  
 
     TempECSService:
         Type: AWS::ECS::Service
@@ -257,7 +247,7 @@ Resources:
           DesiredCount: 1
           LaunchType: "EC2"
           ServiceName: "TempECSServiceName"
-          TaskDefinition: !Ref TempTaskDefinationEC2
+          TaskDefinition: !Ref TempTaskDefinationEC2    
 
     TempServiceScalingTarget:
         Type: AWS::ApplicationAutoScaling::ScalableTarget
@@ -273,19 +263,25 @@ Resources:
               - !GetAtt TempECSService.Name
           RoleARN: !GetAtt TempAutoscalingRole.Arn  # Required
           ScalableDimension: 'ecs:service:DesiredCount' # Required
-          ServiceNamespace: "ecs" # Required
-
-    ServicesScalingPolicy:
-      Type: AWS::ApplicationAutoScaling::ScalingPolicy
-      Properties:
-        PolicyName: "AStepPolicy" # Required
-        PolicyType: "StepScaling" # Required
-        ScalingTargetId: !Ref TempServiceScalingTarget
-        StepScalingPolicyConfiguration:
-          AdjustmentType: "PercentChangeInCapacity"
-          Cooldown: 60
-          MetricAggregationType: "Average"
-          StepAdjustments:
-            - MetricIntervalLowerBound: 0
-              ScalingAdjustment: 200
-               
+          ServiceNamespace: "ecs" # Required                
+      
+    TempContainerInstances:
+        Type: AWS::AutoScaling::LaunchConfiguration
+        Properties:
+          IamInstanceProfile: !Ref TempEC2InstanceProfile 
+          ImageId: !Ref EC2ImageId # Required
+          InstanceType: !Ref InstanceType # Required
+          KeyName: "test"
+          SecurityGroups:
+            - 
+              !Ref TempSecurityGroup
+                       
+          UserData: !Base64 
+            'Fn::Join':
+              - ''
+              - - |
+                  #!/bin/bash -xe
+                - echo ECS_CLUSTER=
+                - !Ref TempECSCluster
+                - |2
+                   >> /etc/ecs/ecs.config;echo ECS_BACKEND_HOST= >> /etc/ecs/ecs.config;
