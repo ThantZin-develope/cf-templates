@@ -1,0 +1,391 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: "Testing CodePipeline with 2 stages"
+  
+Parameters:
+    KeyName: 
+      Description: "Instance's KeyName"
+      Type: String
+      Default: "test"
+
+    ImageId:
+      Description: "Intance's Image Id"
+      Type: String
+      Default: "ami-087c17d1fe0178315"   
+
+    InstanceType:
+      Description: "Instance Type"
+      Type: String
+      Default: "t2.micro"  
+
+    SecurityGroup:
+      Description: "Instance's Security Group"
+      Type: String 
+      Default: "sg-02ef5b17d3180145d"  
+
+    SubnetId:
+      Description: "Instance's Subnet Id"
+      Type: String
+      Default: "subnet-b983d4df"
+
+    RepositoryName: 
+      Description: "Repository Name"
+      Type: String    
+Resources:
+ 
+    TempEC2RoleForCodeDeploy:
+      Type: AWS::IAM::Role
+      Properties:
+        ManagedPolicyArns:
+           - 
+             "arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforAWSCodeDeploy"
+
+        AssumeRolePolicyDocument: 
+            Version: "2012-10-17"
+            Statement:
+              - 
+                  Effect: Allow
+                  Principal: 
+                     Service:
+                       ec2.amazonaws.com
+                  Action:
+                       sts:AssumeRole 
+
+    IamInstanceProfile:
+      Type: AWS::IAM::InstanceProfile
+      Properties:
+        Roles:
+          - 
+            !Ref TempEC2RoleForCodeDeploy              
+
+    TempInstnace:
+      Type: AWS::EC2::Instance
+      Properties:
+        KeyName: !Ref KeyName
+        ImageId: !Ref ImageId
+        InstanceType: !Ref InstanceType
+        SecurityGroupIds:
+          - !Ref SecurityGroup
+        SubnetId: !Ref SubnetId
+        IamInstanceProfile: !Ref IamInstanceProfile
+        UserData: 
+         Fn::Base64: !Sub |
+          #!/bin/bash -ex
+          yum -y update
+          yum install -y ruby
+          yum install -y aws-cli
+          cd /home/ec2-user
+          wget https://aws-codedeploy-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/latest/install
+          chmod +x ./install
+          ./install auto
+        Tags:
+          - Key: Name
+            Value: ProductionServer
+
+    TempCodeDeployApplication:
+      Type: AWS::CodeDeploy::Application
+      Properties:
+        ApplicationName: "TempAngularApp"
+        ComputePlatform: "Server"
+
+    TempCodeDeployServiceRole:
+      Type: AWS::IAM::Role
+      Properties:
+        ManagedPolicyArns:
+          - 
+            "arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole"
+        AssumeRolePolicyDocument: 
+            Version: "2012-10-17"
+            Statement:
+              - 
+                  Effect: Allow
+                  Principal: 
+                     Service:
+                      codedeploy.amazonaws.com
+                  Action:
+                       sts:AssumeRole               
+
+    TempCodeDeployGroupForProduction:
+      Type: AWS::CodeDeploy::DeploymentGroup
+      Properties:
+        ApplicationName: !Ref TempCodeDeployApplication  # Required
+        DeploymentConfigName: "CodeDeployDefault.OneAtATime"
+        DeploymentGroupName: "DeploymentGroupForProduction"
+        DeploymentStyle:
+          DeploymentOption: "WITHOUT_TRAFFIC_CONTROL"
+          DeploymentType: "IN_PLACE"      
+        Ec2TagFilters: 
+            - 
+              Key: "Name"
+              Type: "KEY_AND_VALUE"
+              Value: "ProductionServer"
+        ServiceRoleArn: !GetAtt TempCodeDeployServiceRole.Arn  # Required                
+    
+    TempRoleForCodePipeline:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument: 
+           Version: "2012-10-17"
+           Statement:
+              - 
+                  Effect: Allow
+                  Principal: 
+                     Service:
+                       codepipeline.amazonaws.com
+                  Action:
+                       sts:AssumeRole 
+        Policies:
+          - 
+           PolicyName: "RoleForCodePipeline"
+           PolicyDocument:
+             Version: "2012-10-17"
+             Statement:
+                - 
+                  Effect: "Allow"
+                  Action:
+                      - 
+                       "iam:PassRole"   
+                  Resource: "*"
+                  Condition: 
+                     StringEqualsIfExists:
+                         iam:PassedToService: 
+                             - "cloudformation.amazonaws.com"
+                             - "elasticbeanstalk.amazonaws.com"
+                             - "ec2.amazonaws.com"
+                             - "ecs-tasks.amazonaws.com"
+
+                -
+
+                  Effect: "Allow"
+                  Action:
+                      - "codecommit:CancelUploadArchive"
+                      - "codecommit:GetBranch"   
+                      - "codecommit:GetCommit"
+                      - "codecommit:GetRepository"
+                      - "codecommit:GetUploadArchiveStatus"
+                      - "codecommit:UploadArchive"
+                  Resource: "*"
+
+                -
+
+                  Effect: "Allow"
+                  Action:
+                      - "codedeploy:CreateDeployment"
+                      - "codedeploy:GetApplication"  
+                      - "codedeploy:GetApplicationRevision"
+                      - "codedeploy:GetDeployment"
+                      - "codedeploy:GetDeploymentConfig"
+                      - "codedeploy:RegisterApplicationRevision"
+                  Resource: "*" 
+
+
+                -
+                  Effect: "Allow"
+                  Action:
+                      - "codestar-connections:UseConnection"
+
+                  Resource: "*" 
+                
+                -
+                  Effect: "Allow"
+                  Action:
+                      - "elasticbeanstalk:*"
+                      - "ec2:*"
+                      - "elasticloadbalancing:*"
+                      - "autoscaling:*"
+                      - "cloudwatch:*"
+                      - "s3:*"
+                      - "sns:*"
+                      - "cloudformation:*"
+                      - "rds:*"
+                      - "sqs:*"
+                      - "ecs:*"
+
+                  Resource: "*" 
+
+                -
+                  Effect: "Allow"
+                  Action:
+                      - "lambda:InvokeFunction"
+                      - "lambda:ListFunctions"
+
+                  Resource: "*"   
+
+                -
+                  Effect: "Allow"
+                  Action:
+                      - "opsworks:CreateDeployment"
+                      - "opsworks:DescribeApps"
+                      - "opsworks:DescribeCommands"
+                      - "opsworks:DescribeDeployments"
+                      - "opsworks:DescribeInstances"
+                      - "opsworks:DescribeStacks"
+                      - "opsworks:UpdateApp"
+                      - "opsworks:UpdateStack"
+
+                  Resource: "*"  
+
+                -
+                  Effect: "Allow"
+                  Action:
+                      - "cloudformation:CreateStack"
+                      - "cloudformation:DeleteStack"
+                      - "cloudformation:DescribeStacks"
+                      - "cloudformation:UpdateStack"
+                      - "cloudformation:CreateChangeSet"
+                      - "cloudformation:DeleteChangeSet"
+                      - "cloudformation:DescribeChangeSet"
+                      - "cloudformation:ExecuteChangeSet"
+                      - "cloudformation:SetStackPolicy"
+                      - "cloudformation:ValidateTemplate"
+
+                  Resource: "*" 
+
+                -
+                  Effect: "Allow"
+                  Action:
+                      - "codebuild:BatchGetBuilds"
+                      - "codebuild:StartBuild"
+                      - "codebuild:BatchGetBuildBatches"
+                      - "codebuild:StartBuildBatch"
+
+                  Resource: "*"    
+                -
+                  Effect: "Allow"
+                  Action:
+                      - "devicefarm:ListProjects"
+                      - "devicefarm:ListDevicePools"
+                      - "devicefarm:GetRun"
+                      - "devicefarm:GetUpload"
+                      - "devicefarm:CreateUpload"
+                      - "devicefarm:ScheduleRun"
+
+                  Resource: "*"    
+
+                -
+                  Effect: "Allow"
+                  Action:
+                      - "servicecatalog:ListProvisioningArtifacts"
+                      - "servicecatalog:CreateProvisioningArtifact"
+                      - "servicecatalog:DescribeProvisioningArtifact"
+                      - "servicecatalog:DeleteProvisioningArtifact"
+                      - "servicecatalog:UpdateProduct"
+                  Resource: "*" 
+
+                -
+                  Effect: "Allow"
+                  Action:
+                      - "cloudformation:ValidateTemplate"
+                  Resource: "*"   
+                -
+                  Effect: "Allow"
+                  Action:
+                      - "ecr:DescribeImages"
+                  Resource: "*"    
+
+                -
+                  Effect: "Allow"
+                  Action:
+                      - "states:DescribeExecution"
+                      - "states:DescribeStateMachine"
+                      - "states:StartExecution"
+                  Resource: "*"    
+
+                -
+                  Effect: "Allow"
+                  Action:
+                      - "appconfig:StartDeployment"
+                      - "appconfig:StopDeployment"
+                      - "appconfig:GetDeployment"
+                  Resource: "*"    
+                     
+    s3Bucket:
+      Type: AWS::S3::Bucket
+      Properties: 
+        AccessControl: "Private"
+        BucketName: "codepipelineartifactsstoretztanguapp"
+        PublicAccessBlockConfiguration: 
+              BlockPublicAcls: False
+              BlockPublicPolicy: False
+              IgnorePublicAcls: False
+              RestrictPublicBuckets: False 
+
+        VersioningConfiguration: 
+           Status: "Enabled"
+
+    s3BucketPolicy:
+      Type: AWS::S3::BucketPolicy
+      Properties:
+        Bucket: !Ref s3Bucket
+        PolicyDocument:  
+             Version: "2012-10-17"
+             Statement:  
+               -    
+                 Sid: "DenyUnEncryptedObjectUploads"
+                 Effect: "Deny"
+                 Principal: "*"
+                 Action: "s3:PutObject"
+                 Resource: !Join 
+                            - '/'
+                            - - !GetAtt s3Bucket.Arn
+                              - "*"
+                            
+                 Condition: 
+                     StringNotEquals: 
+                          s3:x-amz-server-side-encryption: "aws:kms"
+               -    
+                 Sid: "DenyInsecureConnections"
+                 Effect: "Deny"
+                 Principal: "*"
+                 Action: "s3:*"
+                 Resource: !Join 
+                            - '/'
+                            - - !GetAtt s3Bucket.Arn
+                              - "*"
+                 Condition: 
+                     Bool: 
+                          aws:SecureTransport: "false"           
+    TempCodePipeline:
+      Type: AWS::CodePipeline::Pipeline
+      Properties:
+        ArtifactStore: 
+            Location: !Ref s3Bucket
+            Type: "S3" 
+        Name: "TempCodePipeline"
+        RoleArn: !GetAtt TempRoleForCodePipeline.Arn  # Required
+        Stages: # Required
+          - 
+            Actions:
+                - 
+                  ActionTypeId: 
+                     Category: "Source"
+                     Owner: "AWS"
+                     Provider: "CodeCommit" 
+                     Version: "1" 
+                  Configuration: 
+                      RepositoryName: !Ref RepositoryName
+                      BranchName: "master"
+                  OutputArtifacts: 
+                     - 
+                       Name: "MyApp"
+                        
+                  Name: "SourceStageAction"
+            Name: "SourceStage"   
+
+          - 
+            Actions:
+                - 
+                  ActionTypeId: 
+                     Category: "Deploy"
+                     Owner: "AWS"
+                     Provider: "CodeDeploy"
+                     Version: "1" 
+                  Configuration: 
+                      ApplicationName: !Ref TempCodeDeployApplication
+                      DeploymentGroupName: !Ref TempCodeDeployGroupForProduction   
+                  InputArtifacts: 
+                     - 
+                       Name: "MyApp" 
+                  Name: "DeployActionStage"
+            Name: "DeployStage"      
+
+      
